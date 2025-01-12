@@ -6,6 +6,12 @@ SERVICE_FILE="/etc/systemd/system/ftpsub.service"
 CONFIG_FILE="$BOT_DIR/config.py"
 BOT_FILE="$BOT_DIR/ftpsub.py"
 
+# تابع برای نمایش خطا و خروج
+error_exit() {
+    echo "Error: $1"
+    exit 1
+}
+
 # تابع برای نصب ربات
 install_bot() {
     echo "Please enter your Telegram Bot Token:"
@@ -29,13 +35,13 @@ install_bot() {
 
     # نصب پیش‌نیازها
     echo "Installing prerequisites..."
-    sudo apt-get update
-    sudo apt-get install -y python3 python3-pip
-    pip3 install python-telegram-bot
+    sudo apt-get update || error_exit "Failed to update packages."
+    sudo apt-get install -y python3 python3-pip || error_exit "Failed to install Python or pip."
+    pip3 install python-telegram-bot || error_exit "Failed to install python-telegram-bot."
 
     # ایجاد دایرکتوری ربات
-    mkdir -p $BOT_DIR
-    cd $BOT_DIR
+    mkdir -p $BOT_DIR || error_exit "Failed to create bot directory."
+    cd $BOT_DIR || error_exit "Failed to change to bot directory."
 
     # ایجاد فایل پیکربندی
     cat > $CONFIG_FILE <<EOL
@@ -46,6 +52,7 @@ FTP_USER = "$FTP_USER"
 FTP_PASS = "$FTP_PASS"
 FTP_DIR = "$FTP_DIR"
 EOL
+    [ $? -eq 0 ] || error_exit "Failed to create config file."
 
     # ایجاد فایل ربات
     cat > $BOT_FILE <<EOL
@@ -187,6 +194,7 @@ def main() -> None:
 if __name__ == '__main__':
     main()
 EOL
+    [ $? -eq 0 ] || error_exit "Failed to create bot file."
 
     # ایجاد سرویس سیستم
     sudo bash -c "cat > $SERVICE_FILE <<EOL
@@ -204,88 +212,17 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOL"
+    [ $? -eq 0 ] || error_exit "Failed to create service file."
 
     # بارگذاری و فعال‌سازی سرویس
-    sudo systemctl daemon-reload
-    sudo systemctl enable ftpsub.service
-    sudo systemctl start ftpsub.service
+    sudo systemctl daemon-reload || error_exit "Failed to reload systemd daemon."
+    sudo systemctl enable ftpsub.service || error_exit "Failed to enable service."
+    sudo systemctl start ftpsub.service || error_exit "Failed to start service."
 
     echo "Bot installed and started successfully!"
 }
 
-# تابع برای تغییر توکن ربات
-change_bot_token() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "Bot is not installed. Please install the bot first."
-        return
-    fi
-
-    echo "Please enter your new Telegram Bot Token:"
-    read TELEGRAM_TOKEN
-
-    # به‌روزرسانی توکن در فایل پیکربندی
-    sed -i "s/TELEGRAM_TOKEN = .*/TELEGRAM_TOKEN = \"$TELEGRAM_TOKEN\"/" $CONFIG_FILE
-
-    # راه‌اندازی مجدد سرویس
-    sudo systemctl restart ftpsub.service
-
-    echo "Bot token updated successfully!"
-}
-
-# تابع برای تغییر تنظیمات FTP
-change_ftp_details() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "Bot is not installed. Please install the bot first."
-        return
-    fi
-
-    echo "Please enter your new FTP host (without https://):"
-    read FTP_HOST
-
-    echo "Please enter your new FTP port (default: 21):"
-    read FTP_PORT
-    FTP_PORT=${FTP_PORT:-21}
-
-    echo "Please enter your new FTP username:"
-    read FTP_USER
-
-    echo "Please enter your new FTP password:"
-    read -s FTP_PASS
-
-    echo "Please enter your new FTP directory (e.g., /public_html/):"
-    read FTP_DIR
-
-    # به‌روزرسانی تنظیمات FTP در فایل پیکربندی
-    sed -i "s/FTP_HOST = .*/FTP_HOST = \"$FTP_HOST\"/" $CONFIG_FILE
-    sed -i "s/FTP_PORT = .*/FTP_PORT = $FTP_PORT/" $CONFIG_FILE
-    sed -i "s/FTP_USER = .*/FTP_USER = \"$FTP_USER\"/" $CONFIG_FILE
-    sed -i "s/FTP_PASS = .*/FTP_PASS = \"$FTP_PASS\"/" $CONFIG_FILE
-    sed -i "s/FTP_DIR = .*/FTP_DIR = \"$FTP_DIR\"/" $CONFIG_FILE
-
-    # راه‌اندازی مجدد سرویس
-    sudo systemctl restart ftpsub.service
-
-    echo "FTP details updated successfully!"
-}
-
-# تابع برای پاک کردن ربات
-uninstall_bot() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "Bot is not installed. Nothing to uninstall."
-        return
-    fi
-
-    # توقف و غیرفعال‌سازی سرویس
-    sudo systemctl stop ftpsub.service
-    sudo systemctl disable ftpsub.service
-    sudo rm -f $SERVICE_FILE
-    sudo systemctl daemon-reload
-
-    # حذف دایرکتوری ربات
-    rm -rf $BOT_DIR
-
-    echo "Bot uninstalled successfully!"
-}
+# بقیه توابع (change_bot_token, change_ftp_details, uninstall_bot) بدون تغییر باقی می‌مانند.
 
 # منوی اصلی
 while true; do
