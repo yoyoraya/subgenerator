@@ -1,180 +1,321 @@
 #!/bin/bash
 
-# بررسی اینکه آیا اسکریپت به‌صورت root اجرا می‌شود یا خیر
-if [[ $EUID -ne 0 ]]; then
-   echo "Please run this script as root or using sudo."
-   exit 1
-fi
+# تنظیمات پیش‌فرض
+BOT_DIR="/home/$USER/ftpsub"
+SERVICE_FILE="/etc/systemd/system/ftpsub.service"
+CONFIG_FILE="$BOT_DIR/config.py"
+BOT_FILE="$BOT_DIR/ftpsub.py"
 
-echo "Installing Python Telegram Bot Setup..."
+# تابع برای نصب ربات
+install_bot() {
+    echo "Please enter your Telegram Bot Token:"
+    read TELEGRAM_TOKEN
 
-# 1. نصب پیش‌نیازهای سیستم
-echo "Updating system and installing dependencies..."
-apt update && apt upgrade -y
-apt install python3 python3-pip -y
+    echo "Please enter your FTP host (without https://):"
+    read FTP_HOST
 
-# 2. نصب کتابخانه‌های Python
-echo "Installing Python libraries..."
-pip3 install python-telegram-bot pysftp
+    echo "Please enter your FTP port (default: 21):"
+    read FTP_PORT
+    FTP_PORT=${FTP_PORT:-21}
 
-# 3. دریافت Bot Token
-echo "Please enter your Telegram Bot Token:"
-read BOT_TOKEN
+    echo "Please enter your FTP username:"
+    read FTP_USER
 
-if [[ -z "$BOT_TOKEN" ]]; then
-  echo "Bot Token is required to continue. Exiting."
-  exit 1
-fi
+    echo "Please enter your FTP password:"
+    read -s FTP_PASS
 
-# 4. ایجاد فایل تنظیمات JSON
-echo "Setting up configuration files..."
-DATA_FILE="links_data.json"
-if [[ ! -f "$DATA_FILE" ]]; then
-  echo "{}" > "$DATA_FILE"
-  echo "Created $DATA_FILE for storing links."
-fi
+    echo "Please enter your FTP directory (e.g., /public_html/):"
+    read FTP_DIR
 
-# 5. ایجاد فایل اصلی ربات
-echo "Creating the main bot script..."
-cat <<EOF >ftp.py
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
-import json
+    # نصب پیش‌نیازها
+    echo "Installing prerequisites..."
+    sudo apt-get update
+    sudo apt-get install -y python3 python3-pip
+    pip3 install python-telegram-bot
+
+    # ایجاد دایرکتوری ربات
+    mkdir -p $BOT_DIR
+    cd $BOT_DIR
+
+    # ایجاد فایل پیکربندی
+    cat > $CONFIG_FILE <<EOL
+TELEGRAM_TOKEN = "$TELEGRAM_TOKEN"
+FTP_HOST = "$FTP_HOST"
+FTP_PORT = $FTP_PORT
+FTP_USER = "$FTP_USER"
+FTP_PASS = "$FTP_PASS"
+FTP_DIR = "$FTP_DIR"
+EOL
+
+    # ایجاد فایل ربات
+    cat > $BOT_FILE <<EOL
 import os
-import pysftp
+import logging
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.constants import ChatAction
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ConversationHandler,
+    CallbackContext,
+    PersistenceInput,
+)
+from ftplib import FTP, error_perm
+from config import TELEGRAM_TOKEN, FTP_HOST, FTP_PORT, FTP_USER, FTP_PASS, FTP_DIR
 
-# تنظیمات فایل JSON
-DATA_FILE = "links_data.json"
+# تنظیمات لاگ
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# بررسی یا ایجاد فایل JSON
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as file:
-        json.dump({}, file)
+# مراحل گفتگو
+REMARK, LINKS = range(2)
 
-# حافظه موقت برای ذخیره اطلاعات کاربر
-user_data = {}
-
-# دکمه‌های اصلی
-main_menu = [
-    [KeyboardButton("Add FTP Server")],
-    [KeyboardButton("Generate Link"), KeyboardButton("Search Links")]
-]
-
-# ذخیره لینک‌ها در فایل JSON
-def save_link(remark, links):
-    with open(DATA_FILE, "r") as file:
-        data = json.load(file)
-    data[remark] = links
-    with open(DATA_FILE, "w") as file:
-        json.dump(data, file)
-
-# جستجوی لینک‌ها بر اساس ریمارک
-def search_links(remark):
-    with open(DATA_FILE, "r") as file:
-        data = json.load(file)
-    return data.get(remark, None)
-
-# ذخیره فایل PHP با لینک‌ها
-def create_php_file(remark, links):
-    php_content = """<div style="user-select: none; color: transparent;">
-<?php
-\$url = "";
-\$content = file_get_contents(\$url);
-echo \$content;
-?>
-</div>
-"""
-    generated_content = ""
-    for link in links:
-        generated_content += php_content.replace('\$url = "";', f'\$url = "{link}";')
-
-    file_name = f"{remark}.php"
-    with open(file_name, "w") as file:
-        file.write(generated_content)
-    
-    return file_name
-
-# دستورات اصلی ربات
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text(
-        "Welcome to FTP Bot! Choose an option:",
-        reply_markup=ReplyKeyboardMarkup(main_menu, resize_keyboard=True)
+# شروع ربات
+async def start(update: Update, context: CallbackContext) -> int:
+    await update.message.reply_text(
+        "Hello! To generate a subscription link, click the 'Generate' button.",
+        reply_markup=ReplyKeyboardMarkup([['Generate']], one_time_keyboard=True)
     )
+    return REMARK
 
-def handle_message(update: Update, context: CallbackContext):
-    user_id = update.message.chat_id
-    text = update.message.text
+# دریافت remark
+async def get_remark(update: Update, context: CallbackContext) -> int:
+    await update.message.reply_text("Please enter the remark:")
+    return LINKS
 
-    if text == "Add FTP Server":
-        user_data[user_id] = {"step": "get_host"}
-        update.message.reply_text("Please provide your FTP Host:")
-    elif user_id in user_data:
-        step = user_data[user_id].get("step")
-        
-        if step == "get_host":
-            user_data[user_id]["host"] = text
-            user_data[user_id]["step"] = "get_user"
-            update.message.reply_text("Please provide your FTP Username:")
-        elif step == "get_user":
-            user_data[user_id]["user"] = text
-            user_data[user_id]["step"] = "get_pass"
-            update.message.reply_text("Please provide your FTP Password:")
-        elif step == "get_pass":
-            user_data[user_id]["password"] = text
-            user_data[user_id]["step"] = "get_port"
-            update.message.reply_text("Please provide your FTP Port (default: 22):")
-        elif step == "get_port":
-            user_data[user_id]["port"] = int(text) if text.isdigit() else 22
-            user_data[user_id]["step"] = "get_folder"
-            update.message.reply_text("Please provide the folder for upload (default: /public_html):")
-        elif step == "get_folder":
-            user_data[user_id]["folder"] = text if text.strip() else "/public_html"
-            update.message.reply_text("FTP server details saved successfully!")
-            user_data[user_id]["step"] = None
+# دریافت لینک‌ها
+async def get_links(update: Update, context: CallbackContext) -> int:
+    remark = update.message.text
+    context.user_data['remark'] = remark
+    await update.message.reply_text("Please send the subscription links, one per line:")
+    return ConversationHandler.END
+
+# پردازش لینک‌ها و ایجاد فایل PHP
+async def process_links(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_chat_action(ChatAction.TYPING)
     
-    elif text == "Generate Link":
-        user_data[user_id] = {"step": "get_remark"}
-        update.message.reply_text("Please provide a remark for your links:")
-    elif user_data[user_id].get("step") == "get_remark":
-        remark = text.replace(" ", "_")
-        user_data[user_id]["remark"] = remark
-        user_data[user_id]["step"] = "get_links"
-        update.message.reply_text("Please provide the links (you can send multiple links separated by spaces):")
-    elif user_data[user_id].get("step") == "get_links":
-        links = [link for link in text.split() if link.startswith("http://") or link.startswith("https://")]
-        remark = user_data[user_id]["remark"]
-        save_link(remark, links)
-        php_file = create_php_file(remark, links)
-        update.message.reply_text(f"Links saved under remark: {remark}\nFile '{php_file}' created.")
-        user_data[user_id]["step"] = None
+    links = update.message.text.split('\n')
+    remark = context.user_data.get('remark', 'default_remark')
+    
+    php_content = ''
+    for link in links:
+        php_content += (
+            '<div style="user-select: none; color: transparent;">\n'
+            '<?php\n'
+            f'$url = "{link.strip()}";\n'
+            '$content = file_get_contents($url);\n'
+            'echo $content;\n'
+            '?>\n'
+            '</div>\n\n'
+        )
+    
+    filename = f"{remark}.php"
+    try:
+        with open(filename, 'w') as f:
+            f.write(php_content)
+        logger.info(f"File {filename} created successfully.")
+    except Exception as e:
+        logger.error(f"Error creating file: {e}")
+        await update.message.reply_text("An error occurred while creating the file. Please try again.")
+        return
+    
+    await update.message.reply_chat_action(ChatAction.UPLOAD_DOCUMENT)
+    
+    try:
+        ftp = FTP()
+        ftp.connect(FTP_HOST, FTP_PORT)
+        logger.info("FTP connection successful.")
+        
+        ftp.login(FTP_USER, FTP_PASS)
+        logger.info("FTP login successful.")
+        
+        ftp.cwd(FTP_DIR)
+        logger.info(f"Changed to directory {FTP_DIR}.")
+        
+        with open(filename, 'rb') as f:
+            ftp.storbinary(f'STOR {filename}', f)
+        logger.info(f"File {filename} uploaded successfully.")
+        
+        ftp.quit()
+        logger.info("FTP connection closed.")
+        
+        link = f"https://{FTP_HOST}/{remark}"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(text="🛡️ Copy Subscription Link", url=link)]
+        ])
+        
+        await update.message.reply_text(
+            f"Your subscription link is ready. Click the button below to copy it:\n\n🛡️ {remark}",
+            reply_markup=keyboard
+        )
+    
+    except error_perm as e:
+        logger.error(f"FTP access error: {e}")
+        await update.message.reply_text("An error occurred while accessing the FTP server. Please try again.")
+    except Exception as e:
+        logger.error(f"File upload error: {e}")
+        await update.message.reply_text("An error occurred while uploading the file. Please try again.")
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
+            logger.info(f"Temporary file {filename} deleted.")
 
-    elif text == "Search Links":
-        user_data[user_id] = {"step": "search_remark"}
-        update.message.reply_text("Please provide the remark to search:")
-    elif user_data[user_id].get("step") == "search_remark":
-        remark = text.replace(" ", "_")
-        links = search_links(remark)
-        if links:
-            update.message.reply_text(f"Links for remark '{remark}':\n" + "\n".join(links))
-        else:
-            update.message.reply_text(f"No links found for remark: {remark}")
-        user_data[user_id]["step"] = None
+def main() -> None:
+    persistence = PersistenceInput(filename="bot_persistence")
+    application = Application.builder().token(TELEGRAM_TOKEN).persistence(persistence).build()
+    
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            REMARK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_remark)],
+            LINKS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_links)],
+        },
+        fallbacks=[],
+        persistent=True,
+    )
+    
+    application.add_handler(conv_handler)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_links))
+    
+    application.run_polling()
 
-# تنظیمات اصلی ربات
-def main():
-    updater = Updater("$BOT_TOKEN", use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
-    updater.start_polling()
-    updater.idle()
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-EOF
+EOL
 
-# 6. اجرای ربات
-echo "Bot setup complete! Running the bot..."
-python3 ftp.py
+    # ایجاد سرویس سیستم
+    sudo bash -c "cat > $SERVICE_FILE <<EOL
+[Unit]
+Description=FTPSUB Bot
+After=network.target
+
+[Service]
+User=$USER
+WorkingDirectory=$BOT_DIR
+ExecStart=/usr/bin/python3 $BOT_DIR/ftpsub.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOL"
+
+    # بارگذاری و فعال‌سازی سرویس
+    sudo systemctl daemon-reload
+    sudo systemctl enable ftpsub.service
+    sudo systemctl start ftpsub.service
+
+    echo "Bot installed and started successfully!"
+}
+
+# تابع برای تغییر توکن ربات
+change_bot_token() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Bot is not installed. Please install the bot first."
+        return
+    fi
+
+    echo "Please enter your new Telegram Bot Token:"
+    read TELEGRAM_TOKEN
+
+    # به‌روزرسانی توکن در فایل پیکربندی
+    sed -i "s/TELEGRAM_TOKEN = .*/TELEGRAM_TOKEN = \"$TELEGRAM_TOKEN\"/" $CONFIG_FILE
+
+    # راه‌اندازی مجدد سرویس
+    sudo systemctl restart ftpsub.service
+
+    echo "Bot token updated successfully!"
+}
+
+# تابع برای تغییر تنظیمات FTP
+change_ftp_details() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Bot is not installed. Please install the bot first."
+        return
+    fi
+
+    echo "Please enter your new FTP host (without https://):"
+    read FTP_HOST
+
+    echo "Please enter your new FTP port (default: 21):"
+    read FTP_PORT
+    FTP_PORT=${FTP_PORT:-21}
+
+    echo "Please enter your new FTP username:"
+    read FTP_USER
+
+    echo "Please enter your new FTP password:"
+    read -s FTP_PASS
+
+    echo "Please enter your new FTP directory (e.g., /public_html/):"
+    read FTP_DIR
+
+    # به‌روزرسانی تنظیمات FTP در فایل پیکربندی
+    sed -i "s/FTP_HOST = .*/FTP_HOST = \"$FTP_HOST\"/" $CONFIG_FILE
+    sed -i "s/FTP_PORT = .*/FTP_PORT = $FTP_PORT/" $CONFIG_FILE
+    sed -i "s/FTP_USER = .*/FTP_USER = \"$FTP_USER\"/" $CONFIG_FILE
+    sed -i "s/FTP_PASS = .*/FTP_PASS = \"$FTP_PASS\"/" $CONFIG_FILE
+    sed -i "s/FTP_DIR = .*/FTP_DIR = \"$FTP_DIR\"/" $CONFIG_FILE
+
+    # راه‌اندازی مجدد سرویس
+    sudo systemctl restart ftpsub.service
+
+    echo "FTP details updated successfully!"
+}
+
+# تابع برای پاک کردن ربات
+uninstall_bot() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Bot is not installed. Nothing to uninstall."
+        return
+    fi
+
+    # توقف و غیرفعال‌سازی سرویس
+    sudo systemctl stop ftpsub.service
+    sudo systemctl disable ftpsub.service
+    sudo rm -f $SERVICE_FILE
+    sudo systemctl daemon-reload
+
+    # حذف دایرکتوری ربات
+    rm -rf $BOT_DIR
+
+    echo "Bot uninstalled successfully!"
+}
+
+# منوی اصلی
+while true; do
+    echo "Please select an option:"
+    echo "0 - Install"
+    echo "1 - Change Bot Token"
+    echo "2 - Change FTP Details"
+    echo "3 - Uninstall"
+    echo "4 - Exit"
+    read -p "Enter your choice: " choice
+
+    case $choice in
+        0)
+            install_bot
+            ;;
+        1)
+            change_bot_token
+            ;;
+        2)
+            change_ftp_details
+            ;;
+        3)
+            uninstall_bot
+            ;;
+        4)
+            echo "Exiting..."
+            break
+            ;;
+        *)
+            echo "Invalid choice. Please try again."
+            ;;
+    esac
+done
