@@ -28,7 +28,7 @@ install_bot() {
     read FTP_USER
 
     echo "Please enter your FTP password:"
-    read -s FTP_PASS
+    read FTP_PASS  # بدون -s
 
     echo "Please enter your FTP directory (e.g., /public_html/):"
     read FTP_DIR
