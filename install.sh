@@ -1,61 +1,75 @@
 #!/bin/bash
 
 # تنظیمات پیش‌فرض
-BOT_DIR="/home/$USER/ftpsub"
+BOT_DIR="/root/ftpsub"  # تغییر مسیر به /root/ftpsub
 SERVICE_FILE="/etc/systemd/system/ftpsub.service"
 CONFIG_FILE="$BOT_DIR/config.py"
 BOT_FILE="$BOT_DIR/ftpsub.py"
 
 # تابع برای نمایش خطا و خروج
 error_exit() {
-    echo "Error: $1"
+    echo -e "${RED}Error: $1${NC}"
     exit 1
+}
+
+# تابع برای نمایش منو
+show_menu() {
+    clear
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}          FTP Sub V2Ray Bot Menu        ${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}0 - Install${NC}"
+    echo -e "${GREEN}1 - Change Bot Token${NC}"
+    echo -e "${GREEN}2 - Change FTP Details${NC}"
+    echo -e "${GREEN}3 - Uninstall${NC}"
+    echo -e "${RED}4 - Exit${NC}"
+    echo -e "${BLUE}========================================${NC}"
 }
 
 # تابع برای نصب ربات
 install_bot() {
-    echo "Please enter your Telegram Bot Token:"
+    echo -e "${YELLOW}Please enter your Telegram Bot Token:${NC}"
     read TELEGRAM_TOKEN
 
-    echo "Please enter your FTP host (without https://):"
+    echo -e "${YELLOW}Please enter your FTP host (without https://):${NC}"
     read FTP_HOST
 
-    echo "Please enter your FTP port (default: 21):"
+    echo -e "${YELLOW}Please enter your FTP port (default: 21):${NC}"
     read FTP_PORT
     FTP_PORT=${FTP_PORT:-21}
 
-    echo "Please enter your FTP username:"
+    echo -e "${YELLOW}Please enter your FTP username:${NC}"
     read FTP_USER
 
-    echo "Please enter your FTP password:"
-    read FTP_PASS  # بدون -s
+    echo -e "${YELLOW}Please enter your FTP password:${NC}"
+    read -s FTP_PASS
 
-    echo "Please enter your FTP directory (e.g., /public_html/):"
+    echo -e "${YELLOW}Please enter your FTP directory (e.g., /public_html/):${NC}"
     read FTP_DIR
 
     # نصب پیش‌نیازها
-    echo "Installing prerequisites..."
+    echo -e "${BLUE}Installing prerequisites...${NC}"
     sudo apt-get update || error_exit "Failed to update packages."
     sudo apt-get install -y python3 python3-pip || error_exit "Failed to install Python or pip."
     pip3 install python-telegram-bot || error_exit "Failed to install python-telegram-bot."
 
     # ایجاد دایرکتوری ربات
-    mkdir -p $BOT_DIR || error_exit "Failed to create bot directory."
+    sudo mkdir -p $BOT_DIR || error_exit "Failed to create bot directory."
     cd $BOT_DIR || error_exit "Failed to change to bot directory."
 
     # ایجاد فایل پیکربندی
-    cat > $CONFIG_FILE <<EOL
-TELEGRAM_TOKEN = "$TELEGRAM_TOKEN"
-FTP_HOST = "$FTP_HOST"
+    sudo bash -c "cat > $CONFIG_FILE <<EOL
+TELEGRAM_TOKEN = \"$TELEGRAM_TOKEN\"
+FTP_HOST = \"$FTP_HOST\"
 FTP_PORT = $FTP_PORT
-FTP_USER = "$FTP_USER"
-FTP_PASS = "$FTP_PASS"
-FTP_DIR = "$FTP_DIR"
-EOL
+FTP_USER = \"$FTP_USER\"
+FTP_PASS = \"$FTP_PASS\"
+FTP_DIR = \"$FTP_DIR\"
+EOL"
     [ $? -eq 0 ] || error_exit "Failed to create config file."
 
     # ایجاد فایل ربات
-    cat > $BOT_FILE <<EOL
+    sudo bash -c "cat > $BOT_FILE <<EOL
 import os
 import logging
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
@@ -114,7 +128,7 @@ async def process_links(update: Update, context: CallbackContext) -> None:
         php_content += (
             '<div style="user-select: none; color: transparent;">\n'
             '<?php\n'
-            f'$url = "{link.strip()}";\n'
+            f'$url = \"{link.strip()}\";\n'
             '$content = file_get_contents($url);\n'
             'echo $content;\n'
             '?>\n'
@@ -193,7 +207,7 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-EOL
+EOL"
     [ $? -eq 0 ] || error_exit "Failed to create bot file."
 
     # ایجاد سرویس سیستم
@@ -203,7 +217,7 @@ Description=FTPSUB Bot
 After=network.target
 
 [Service]
-User=$USER
+User=root
 WorkingDirectory=$BOT_DIR
 ExecStart=/usr/bin/python3 $BOT_DIR/ftpsub.py
 Restart=always
@@ -219,40 +233,53 @@ EOL"
     sudo systemctl enable ftpsub.service || error_exit "Failed to enable service."
     sudo systemctl start ftpsub.service || error_exit "Failed to start service."
 
-    echo "Bot installed and started successfully!"
+    echo -e "${GREEN}Bot installed and started successfully!${NC}"
 }
 
-# بقیه توابع (change_bot_token, change_ftp_details, uninstall_bot) بدون تغییر باقی می‌مانند.
+# تابع برای تغییر توکن ربات
+change_bot_token() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}Bot is not installed. Please install the bot first.${NC}"
+        return
+    fi
 
-# منوی اصلی
-while true; do
-    echo "Please select an option:"
-    echo "0 - Install"
-    echo "1 - Change Bot Token"
-    echo "2 - Change FTP Details"
-    echo "3 - Uninstall"
-    echo "4 - Exit"
-    read -p "Enter your choice: " choice
+    echo -e "${YELLOW}Please enter your new Telegram Bot Token:${NC}"
+    read TELEGRAM_TOKEN
 
-    case $choice in
-        0)
-            install_bot
-            ;;
-        1)
-            change_bot_token
-            ;;
-        2)
-            change_ftp_details
-            ;;
-        3)
-            uninstall_bot
-            ;;
-        4)
-            echo "Exiting..."
-            break
-            ;;
-        *)
-            echo "Invalid choice. Please try again."
-            ;;
-    esac
-done
+    # به‌روزرسانی توکن در فایل پیکربندی
+    sudo sed -i "s/TELEGRAM_TOKEN = .*/TELEGRAM_TOKEN = \"$TELEGRAM_TOKEN\"/" $CONFIG_FILE
+
+    # راه‌اندازی مجدد سرویس
+    sudo systemctl restart ftpsub.service
+
+    echo -e "${GREEN}Bot token updated successfully!${NC}"
+}
+
+# تابع برای تغییر تنظیمات FTP
+change_ftp_details() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}Bot is not installed. Please install the bot first.${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}Please enter your new FTP host (without https://):${NC}"
+    read FTP_HOST
+
+    echo -e "${YELLOW}Please enter your new FTP port (default: 21):${NC}"
+    read FTP_PORT
+    FTP_PORT=${FTP_PORT:-21}
+
+    echo -e "${YELLOW}Please enter your new FTP username:${NC}"
+    read FTP_USER
+
+    echo -e "${YELLOW}Please enter your new FTP password:${NC}"
+    read -s FTP_PASS
+
+    echo -e "${YELLOW}Please enter your new FTP directory (e.g., /public_html/):${NC}"
+    read FTP_DIR
+
+    # به‌روزرسانی تنظیمات FTP در فایل پیکربندی
+    sudo sed -i "s/FTP_HOST = .*/FTP_HOST = \"$FTP_HOST\"/" $CONFIG_FILE
+    sudo sed -i "s/FTP_PORT = .*/FTP_PORT = $FTP_PORT/" $CONFIG_FILE
+    sudo sed -i "s/FTP_USER = .*/FTP_USER = \"$FTP_USER\"/" $CONFIG_FILE
+    sudo sed -i "s/FTP_PASS = .*/FTP_PASS = \"$FTP_PASS\"/" $CON
