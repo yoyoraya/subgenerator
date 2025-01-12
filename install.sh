@@ -282,4 +282,60 @@ change_ftp_details() {
     sudo sed -i "s/FTP_HOST = .*/FTP_HOST = \"$FTP_HOST\"/" $CONFIG_FILE
     sudo sed -i "s/FTP_PORT = .*/FTP_PORT = $FTP_PORT/" $CONFIG_FILE
     sudo sed -i "s/FTP_USER = .*/FTP_USER = \"$FTP_USER\"/" $CONFIG_FILE
-    sudo sed -i "s/FTP_PASS = .*/FTP_PASS = \"$FTP_PASS\"/" $CON
+    sudo sed -i "s/FTP_PASS = .*/FTP_PASS = \"$FTP_PASS\"/" $CONFIG_FILE
+    sudo sed -i "s/FTP_DIR = .*/FTP_DIR = \"$FTP_DIR\"/" $CONFIG_FILE
+
+    # راه‌اندازی مجدد سرویس
+    sudo systemctl restart ftpsub.service
+
+    echo -e "${GREEN}FTP details updated successfully!${NC}"
+}
+
+# تابع برای پاک کردن ربات
+uninstall_bot() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}Bot is not installed. Nothing to uninstall.${NC}"
+        return
+    fi
+
+    # توقف و غیرفعال‌سازی سرویس
+    sudo systemctl stop ftpsub.service
+    sudo systemctl disable ftpsub.service
+    sudo rm -f $SERVICE_FILE
+    sudo systemctl daemon-reload
+
+    # حذف دایرکتوری ربات
+    sudo rm -rf $BOT_DIR
+
+    echo -e "${GREEN}Bot uninstalled successfully!${NC}"
+}
+
+# منوی اصلی
+while true; do
+    show_menu
+    read -p "Enter your choice: " choice
+
+    case $choice in
+        0)
+            install_bot
+            ;;
+        1)
+            change_bot_token
+            ;;
+        2)
+            change_ftp_details
+            ;;
+        3)
+            uninstall_bot
+            ;;
+        4)
+            echo -e "${RED}Exiting...${NC}"
+            break
+            ;;
+        *)
+            echo -e "${RED}Invalid choice. Please try again.${NC}"
+            ;;
+    esac
+
+    read -p "Press Enter to continue..."
+done
