@@ -1,3 +1,52 @@
+#!/bin/bash
+test_ftp_connection() {
+    echo "🔌 Testing FTP connection to $1:$2..."
+    python3 - <<EOF
+import sys
+from ftplib import FTP
+try:
+    ftp = FTP()
+    ftp.connect("$1", $2)
+    ftp.login("$3", "$4")
+    ftp.cwd("$5")
+    print("✅ FTP connection successful!")
+    ftp.quit()
+    sys.exit(0)
+except Exception as e:
+    print(f"❌ FTP Error: {str(e)}")
+    sys.exit(1)
+EOF
+}
+while true; do
+    clear
+    echo "📲 Telegram Bot Setup"
+    
+    read -p "Bot Token: " BOT_TOKEN
+    read -p "FTP Host (e.g., ftp.example.com): " FTP_HOST
+    read -p "FTP Port (default 21): " FTP_PORT
+    FTP_PORT=${FTP_PORT:-21}
+    read -p "FTP Username: " FTP_USER
+    read -p "FTP Password: " FTP_PASS
+    read -p "FTP Upload Directory (e.g., /public_html): " FTP_DIR
+    FTP_DIR=${FTP_DIR%/}
+    if test_ftp_connection "$FTP_HOST" "$FTP_PORT" "$FTP_USER" "$FTP_PASS" "$FTP_DIR"; then
+        echo "Creating .env file..."
+        cat > .env <<EOL
+BOT_TOKEN=$BOT_TOKEN
+FTP_HOST=$FTP_HOST
+FTP_PORT=$FTP_PORT
+FTP_USER=$FTP_USER
+FTP_PASS=$FTP_PASS
+FTP_DIR=$FTP_DIR
+EOL
+        break
+    else
+        echo
+        read -p "Invalid credentials! Press Enter to retry..."
+    fi
+done
+cat > ftpv2ray.py <<EOF
+#bot file code
 # -*- coding: utf-8 -*-
 import os
 from difflib import SequenceMatcher
@@ -211,3 +260,32 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+#end of bot file   
+EOF
+echo "📦 Installing dependencies..."
+pip3 install python-telegram-bot python-dotenv
+echo "🔒 Setting permissions..."
+chmod 600 .env
+chmod +x ftpv2ray.py
+echo -e "\n🎉 Setup complete! Start the bot:"
+echo "python3 ftpv2ray.py"
+# Create systemd Service
+echo "🛠 Creating systemd service..."
+cat > /etc/systemd/system/v2ray-bot.service <<EOL
+[Unit]
+Description=V2ray Telegram Bot
+After=network.target
+[Service]
+User=root
+WorkingDirectory=$(pwd)
+ExecStart=/usr/bin/python3 $(pwd)/ftpv2ray.py
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOL
+# Running Service
+systemctl daemon-reload
+systemctl enable v2ray-bot
+systemctl start v2ray-bot
+echo -e "\n🎉 Setup complete! Bot is running automatically."
