@@ -1,341 +1,241 @@
 #!/bin/bash
 
-# تنظیمات پیش‌فرض
-BOT_DIR="/root/ftpsub"  # تغییر مسیر به /root/ftpsub
-SERVICE_FILE="/etc/systemd/system/ftpsub.service"
-CONFIG_FILE="$BOT_DIR/config.py"
-BOT_FILE="$BOT_DIR/ftpsub.py"
+test_ftp_connection() {
+    echo "🔌 Testing FTP connection to $1:$2..."
+    python3 - <<EOF
+import sys
+from ftplib import FTP
 
-# تابع برای نمایش خطا و خروج
-error_exit() {
-    echo -e "${RED}Error: $1${NC}"
-    exit 1
+try:
+    ftp = FTP()
+    ftp.connect("$1", $2)
+    ftp.login("$3", "$4")
+    ftp.cwd("$5")
+    print("✅ FTP connection successful!")
+    ftp.quit()
+    sys.exit(0)
+except Exception as e:
+    print(f"❌ FTP Error: {str(e)}")
+    sys.exit(1)
+EOF
 }
 
-# تابع برای نمایش منو
-show_menu() {
+while true; do
     clear
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}          FTP Sub V2Ray Bot Menu        ${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}0 - Install${NC}"
-    echo -e "${GREEN}1 - Change Bot Token${NC}"
-    echo -e "${GREEN}2 - Change FTP Details${NC}"
-    echo -e "${GREEN}3 - Uninstall${NC}"
-    echo -e "${RED}4 - Exit${NC}"
-    echo -e "${BLUE}========================================${NC}"
-}
-
-# تابع برای نصب ربات
-install_bot() {
-    echo -e "${YELLOW}Please enter your Telegram Bot Token:${NC}"
-    read TELEGRAM_TOKEN
-
-    echo -e "${YELLOW}Please enter your FTP host (without https://):${NC}"
-    read FTP_HOST
-
-    echo -e "${YELLOW}Please enter your FTP port (default: 21):${NC}"
-    read FTP_PORT
+    echo "📲 Telegram Bot Setup"
+    
+    read -p "Bot Token: " BOT_TOKEN
+    read -p "FTP Host (e.g., ftp.example.com): " FTP_HOST
+    read -p "FTP Port (default 21): " FTP_PORT
     FTP_PORT=${FTP_PORT:-21}
+    read -p "FTP Username: " FTP_USER
+    read -p "FTP Password: " FTP_PASS
+    read -p "FTP Upload Directory (e.g., /public_html): " FTP_DIR
+    FTP_DIR=${FTP_DIR%/}
 
-    echo -e "${YELLOW}Please enter your FTP username:${NC}"
-    read FTP_USER
-
-    echo -e "${YELLOW}Please enter your FTP password:${NC}"
-    read -s FTP_PASS
-
-    echo -e "${YELLOW}Please enter your FTP directory (e.g., /public_html/):${NC}"
-    read FTP_DIR
-
-    # نصب پیش‌نیازها
-    echo -e "${BLUE}Installing prerequisites...${NC}"
-    sudo apt-get update || error_exit "Failed to update packages."
-    sudo apt-get install -y python3 python3-pip || error_exit "Failed to install Python or pip."
-    pip3 install python-telegram-bot || error_exit "Failed to install python-telegram-bot."
-
-    # ایجاد دایرکتوری ربات
-    sudo mkdir -p $BOT_DIR || error_exit "Failed to create bot directory."
-    cd $BOT_DIR || error_exit "Failed to change to bot directory."
-
-    # ایجاد فایل پیکربندی
-    sudo bash -c "cat > $CONFIG_FILE <<EOL
-TELEGRAM_TOKEN = \"$TELEGRAM_TOKEN\"
-FTP_HOST = \"$FTP_HOST\"
-FTP_PORT = $FTP_PORT
-FTP_USER = \"$FTP_USER\"
-FTP_PASS = \"$FTP_PASS\"
-FTP_DIR = \"$FTP_DIR\"
-EOL"
-    [ $? -eq 0 ] || error_exit "Failed to create config file."
-
-    # ایجاد فایل ربات
-    sudo bash -c "cat > $BOT_FILE <<EOL
+    if test_ftp_connection "$FTP_HOST" "$FTP_PORT" "$FTP_USER" "$FTP_PASS" "$FTP_DIR"; then
+        echo "Creating .env file..."
+        cat > .env <<EOL
+BOT_TOKEN=$BOT_TOKEN
+FTP_HOST=$FTP_HOST
+FTP_PORT=$FTP_PORT
+FTP_USER=$FTP_USER
+FTP_PASS=$FTP_PASS
+FTP_DIR=$FTP_DIR
+EOL
+        break
+    else
+        echo
+        read -p "Invalid credentials! Press Enter to retry..."
+    fi
+done
+cat > ftpv2ray.py <<EOF
+#bot file code
 import os
-import logging
-from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ChatAction
+from dotenv import load_dotenv
+from ftplib import FTP
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     filters,
     ConversationHandler,
-    CallbackContext,
-    PersistenceInput,
+    ContextTypes
 )
-from ftplib import FTP, error_perm
-from config import TELEGRAM_TOKEN, FTP_HOST, FTP_PORT, FTP_USER, FTP_PASS, FTP_DIR
 
-# تنظیمات لاگ
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+load_dotenv()
+TOKEN = os.getenv('BOT_TOKEN')
+FTP_HOST = os.getenv('FTP_HOST')
+FTP_PORT = int(os.getenv('FTP_PORT'))
+FTP_USER = os.getenv('FTP_USER')
+FTP_PASS = os.getenv('FTP_PASS')
+FTP_DIR = os.getenv('FTP_DIR')
 
-# مراحل گفتگو
-REMARK, LINKS = range(2)
+# حالت‌های مکالمه
+LINKS, FILENAME = range(2)
 
-# شروع ربات
-async def start(update: Update, context: CallbackContext) -> int:
+# ایجاد کیبورد با دکمه استارت
+START_KEYBOARD = ReplyKeyboardMarkup([['/start']], resize_keyboard=True)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شروع مکالمه و ریست داده‌های کاربر"""
+    context.user_data.clear()
     await update.message.reply_text(
-        "Hello! To generate a subscription link, click the 'Generate' button.",
-        reply_markup=ReplyKeyboardMarkup([['Generate']], one_time_keyboard=True)
+        'لطفاً لینک‌های V2ray را ارسال کنید (هر خط یک لینک)\n'
+        '⚠️ فقط http/https و آدرس IP مجاز است!',
+        reply_markup=START_KEYBOARD
     )
-    return REMARK
-
-# دریافت remark
-async def get_remark(update: Update, context: CallbackContext) -> int:
-    await update.message.reply_text("Please enter the remark:")
     return LINKS
 
-# دریافت لینک‌ها
-async def get_links(update: Update, context: CallbackContext) -> int:
-    remark = update.message.text
-    context.user_data['remark'] = remark
-    await update.message.reply_text("Please send the subscription links, one per line:")
+async def process_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پردازش لینک‌های ارسالی"""
+    # اگر کاربر /start فرستاد، مکالمه را ریست کنید
+    if update.message.text == '/start':
+        return await start(update, context)
+    
+    links = [link.strip() for link in update.message.text.split('\n') if link.strip()]
+    valid_links = []
+    invalid_links = []
+    
+    for link in links:
+        # اعتبارسنجی پیشرفته (فقط http/https و IP)
+        is_valid = (
+            link.startswith(('http://', 'https://')) or
+            (link.replace('.', '').isdigit() and '/' in link)  # آدرس IP با مسیر
+        )
+        
+        if is_valid:
+            valid_links.append(link)
+        else:
+            invalid_links.append(link)
+    
+    # ارسال پیام برای لینک‌های نامعتبر
+    if invalid_links:
+        error_msg = "❌ لینک‌های نامعتبر:\n" + "\n".join(invalid_links)
+        await update.message.reply_text(error_msg)
+    
+    if not valid_links:
+        await update.message.reply_text("⚠️ هیچ لینک معتبری یافت نشد! دوباره ارسال کنید.")
+        return LINKS
+    
+    context.user_data['links'] = valid_links
+    await update.message.reply_text('✅ لینک‌های معتبر دریافت شد! نام فایل را وارد کنید:')
+    return FILENAME
+
+def generate_php(filename, links):
+    """ساخت فایل PHP"""
+    php_code = ""
+    for link in links:
+        php_code += f'''<div style="user-select: none; color: transparent;">
+<?php
+$url = "{link}";
+$content = file_get_contents($url);
+echo $content;
+?>
+</div>\n\n'''
+    php_code = php_code.rsplit('\n\n', 1)[0]
+    
+    with open(f'{filename}.php', 'w', encoding='utf-8') as f:
+        f.write(php_code)
+
+def upload_to_ftp(filename):
+    local_file = f'{filename}.php'  # تعریف متغیر خارج از بلوک try
+    
+    try:
+        # اتصال به FTP و آپلود
+        with FTP() as ftp:
+            ftp.connect(FTP_HOST, FTP_PORT)
+            ftp.login(FTP_USER, FTP_PASS)
+            ftp.cwd(FTP_DIR)
+            
+            # آپلود فایل
+            with open(local_file, 'rb') as f:
+                ftp.storbinary(f'STOR {filename}.php', f)
+        
+        # حذف فایل محلی پس از موفقیت
+        if os.path.exists(local_file):
+            os.remove(local_file)
+        
+        # ساخت لینک
+        base_url = f"https://{FTP_HOST.replace('ftp.', '')}"
+        clean_path = FTP_DIR.replace('/public_html', '')
+        return f"{base_url}{clean_path}/{filename}"
+    
+    except Exception as e:
+        # حذف فایل محلی در صورت خطا
+        if os.path.exists(local_file):
+            os.remove(local_file)
+        raise Exception(f"خطا در آپلود: {str(e)}")
+
+async def process_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پردازش نام فایل"""
+    # اگر کاربر /start فرستاد، مکالمه را ریست کنید
+    if update.message.text == '/start':
+        return await start(update, context)
+    
+    filename = update.message.text.strip()
+    if not filename:
+        await update.message.reply_text("⚠️ نام فایل نمی‌تواند خالی باشد!")
+        return FILENAME
+    
+    try:
+        links = context.user_data['links']
+        generate_php(filename, links)
+        file_url = upload_to_ftp(filename)
+        await update.message.reply_text(f'✅ فایل آماده است!\nلینک دانلود:\n{file_url}')
+    except Exception as e:
+        await update.message.reply_text(f'❌ خطا: {str(e)}')
+    
     return ConversationHandler.END
 
-# پردازش لینک‌ها و ایجاد فایل PHP
-async def process_links(update: Update, context: CallbackContext) -> None:
-    await update.message.reply_chat_action(ChatAction.TYPING)
-    
-    links = update.message.text.split('\n')
-    remark = context.user_data.get('remark', 'default_remark')
-    
-    php_content = ''
-    for link in links:
-        php_content += (
-            '<div style="user-select: none; color: transparent;">\n'
-            '<?php\n'
-            f'$url = \"{link.strip()}\";\n'
-            '$content = file_get_contents($url);\n'
-            'echo $content;\n'
-            '?>\n'
-            '</div>\n\n'
-        )
-    
-    filename = f"{remark}.php"
-    try:
-        with open(filename, 'w') as f:
-            f.write(php_content)
-        logger.info(f"File {filename} created successfully.")
-    except Exception as e:
-        logger.error(f"Error creating file: {e}")
-        await update.message.reply_text("An error occurred while creating the file. Please try again.")
-        return
-    
-    await update.message.reply_chat_action(ChatAction.UPLOAD_DOCUMENT)
-    
-    try:
-        ftp = FTP()
-        ftp.connect(FTP_HOST, FTP_PORT)
-        logger.info("FTP connection successful.")
-        
-        ftp.login(FTP_USER, FTP_PASS)
-        logger.info("FTP login successful.")
-        
-        ftp.cwd(FTP_DIR)
-        logger.info(f"Changed to directory {FTP_DIR}.")
-        
-        with open(filename, 'rb') as f:
-            ftp.storbinary(f'STOR {filename}', f)
-        logger.info(f"File {filename} uploaded successfully.")
-        
-        ftp.quit()
-        logger.info("FTP connection closed.")
-        
-        link = f"https://{FTP_HOST}/{remark}"
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(text="🛡️ Copy Subscription Link", url=link)]
-        ])
-        
-        await update.message.reply_text(
-            f"Your subscription link is ready. Click the button below to copy it:\n\n🛡️ {remark}",
-            reply_markup=keyboard
-        )
-    
-    except error_perm as e:
-        logger.error(f"FTP access error: {e}")
-        await update.message.reply_text("An error occurred while accessing the FTP server. Please try again.")
-    except Exception as e:
-        logger.error(f"File upload error: {e}")
-        await update.message.reply_text("An error occurred while uploading the file. Please try again.")
-    finally:
-        if os.path.exists(filename):
-            os.remove(filename)
-            logger.info(f"Temporary file {filename} deleted.")
+def main():
+    application = ApplicationBuilder().token(TOKEN).build()
 
-def main() -> None:
-    persistence = PersistenceInput(filename="bot_persistence")
-    application = Application.builder().token(TELEGRAM_TOKEN).persistence(persistence).build()
-    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            REMARK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_remark)],
-            LINKS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_links)],
+            LINKS: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_links)],
+            FILENAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_filename)]
         },
-        fallbacks=[],
-        persistent=True,
+        fallbacks=[CommandHandler('start', start)]  # ریست با /start در هر مرحله
     )
-    
+
     application.add_handler(conv_handler)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_links))
-    
     application.run_polling()
 
 if __name__ == '__main__':
     main()
-EOL"
-    [ $? -eq 0 ] || error_exit "Failed to create bot file."
 
-    # ایجاد سرویس سیستم
-    sudo bash -c "cat > $SERVICE_FILE <<EOL
+#end of bot file   
+EOF
+echo "📦 Installing dependencies..."
+pip3 install python-telegram-bot python-dotenv
+
+echo "🔒 Setting permissions..."
+chmod 600 .env
+chmod +x ftpv2ray.py
+
+echo -e "\n🎉 Setup complete! Start the bot:"
+echo "python3 ftpv2ray.py"
+# Create systemd Service
+echo "🛠 Creating systemd service..."
+cat > /etc/systemd/system/v2ray-bot.service <<EOL
 [Unit]
-Description=FTPSUB Bot
+Description=V2ray Telegram Bot
 After=network.target
 
 [Service]
 User=root
-WorkingDirectory=$BOT_DIR
-ExecStart=/usr/bin/python3 $BOT_DIR/ftpsub.py
+WorkingDirectory=$(pwd)
+ExecStart=/usr/bin/python3 $(pwd)/ftpv2ray.py
 Restart=always
-RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOL"
-    [ $? -eq 0 ] || error_exit "Failed to create service file."
-
-    # بارگذاری و فعال‌سازی سرویس
-    sudo systemctl daemon-reload || error_exit "Failed to reload systemd daemon."
-    sudo systemctl enable ftpsub.service || error_exit "Failed to enable service."
-    sudo systemctl start ftpsub.service || error_exit "Failed to start service."
-
-    echo -e "${GREEN}Bot installed and started successfully!${NC}"
-}
-
-# تابع برای تغییر توکن ربات
-change_bot_token() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${RED}Bot is not installed. Please install the bot first.${NC}"
-        return
-    fi
-
-    echo -e "${YELLOW}Please enter your new Telegram Bot Token:${NC}"
-    read TELEGRAM_TOKEN
-
-    # به‌روزرسانی توکن در فایل پیکربندی
-    sudo sed -i "s/TELEGRAM_TOKEN = .*/TELEGRAM_TOKEN = \"$TELEGRAM_TOKEN\"/" $CONFIG_FILE
-
-    # راه‌اندازی مجدد سرویس
-    sudo systemctl restart ftpsub.service
-
-    echo -e "${GREEN}Bot token updated successfully!${NC}"
-}
-
-# تابع برای تغییر تنظیمات FTP
-change_ftp_details() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${RED}Bot is not installed. Please install the bot first.${NC}"
-        return
-    fi
-
-    echo -e "${YELLOW}Please enter your new FTP host (without https://):${NC}"
-    read FTP_HOST
-
-    echo -e "${YELLOW}Please enter your new FTP port (default: 21):${NC}"
-    read FTP_PORT
-    FTP_PORT=${FTP_PORT:-21}
-
-    echo -e "${YELLOW}Please enter your new FTP username:${NC}"
-    read FTP_USER
-
-    echo -e "${YELLOW}Please enter your new FTP password:${NC}"
-    read -s FTP_PASS
-
-    echo -e "${YELLOW}Please enter your new FTP directory (e.g., /public_html/):${NC}"
-    read FTP_DIR
-
-    # به‌روزرسانی تنظیمات FTP در فایل پیکربندی
-    sudo sed -i "s/FTP_HOST = .*/FTP_HOST = \"$FTP_HOST\"/" $CONFIG_FILE
-    sudo sed -i "s/FTP_PORT = .*/FTP_PORT = $FTP_PORT/" $CONFIG_FILE
-    sudo sed -i "s/FTP_USER = .*/FTP_USER = \"$FTP_USER\"/" $CONFIG_FILE
-    sudo sed -i "s/FTP_PASS = .*/FTP_PASS = \"$FTP_PASS\"/" $CONFIG_FILE
-    sudo sed -i "s/FTP_DIR = .*/FTP_DIR = \"$FTP_DIR\"/" $CONFIG_FILE
-
-    # راه‌اندازی مجدد سرویس
-    sudo systemctl restart ftpsub.service
-
-    echo -e "${GREEN}FTP details updated successfully!${NC}"
-}
-
-# تابع برای پاک کردن ربات
-uninstall_bot() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${RED}Bot is not installed. Nothing to uninstall.${NC}"
-        return
-    fi
-
-    # توقف و غیرفعال‌سازی سرویس
-    sudo systemctl stop ftpsub.service
-    sudo systemctl disable ftpsub.service
-    sudo rm -f $SERVICE_FILE
-    sudo systemctl daemon-reload
-
-    # حذف دایرکتوری ربات
-    sudo rm -rf $BOT_DIR
-
-    echo -e "${GREEN}Bot uninstalled successfully!${NC}"
-}
-
-# منوی اصلی
-while true; do
-    show_menu
-    read -p "Enter your choice: " choice
-
-    case $choice in
-        0)
-            install_bot
-            ;;
-        1)
-            change_bot_token
-            ;;
-        2)
-            change_ftp_details
-            ;;
-        3)
-            uninstall_bot
-            ;;
-        4)
-            echo -e "${RED}Exiting...${NC}"
-            break
-            ;;
-        *)
-            echo -e "${RED}Invalid choice. Please try again.${NC}"
-            ;;
-    esac
-
-    read -p "Press Enter to continue..."
-done
+EOL
+# Running Service
+systemctl daemon-reload
+systemctl enable v2ray-bot
+systemctl start v2ray-bot
+echo -e "\n🎉 Setup complete! Bot is running automatically."
