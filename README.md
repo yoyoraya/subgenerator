@@ -24,14 +24,9 @@
 - 📡 **پشتیبانی از چندین سرور V2Ray**
 - 🔎 **جستجوی هوشمند با الگوریتم SequenceMatcher**
 - 📦 **نصب آسان با اسکریپت Bash**
-
+- 
 ## 📦 نحوه نصب
+
 ```bash
-# دانلود اسکریپت نصب
-wget https://raw.githubusercontent.com/your-repo/main/setup.sh
-
-# دادن مجوز اجرا
-chmod +x setup.sh
-
-# اجرای اسکریپت
-sudo ./setup.sh
+bash <(curl -Ls https://raw.githubusercontent.com/yoyoraya/subgenerator/master/install.sh)
+ ```
