@@ -1,37 +1,66 @@
 #!/bin/bash
-test_ftp_connection() {
-    echo "🔌 Testing FTP connection to $1:$2..."
-    python3 - <<EOF
-import sys
-from ftplib import FTP
-try:
-    ftp = FTP()
-    ftp.connect("$1", $2)
-    ftp.login("$3", "$4")
-    ftp.cwd("$5")
-    print("✅ FTP connection successful!")
-    ftp.quit()
-    sys.exit(0)
-except Exception as e:
-    print(f"❌ FTP Error: {str(e)}")
-    sys.exit(1)
-EOF
-}
-while true; do
-    clear
-    echo "📲 Telegram Bot Setup"
+
+# Configuration
+SERVICE_NAME="v2ray-bot"
+PROJECT_DIR=$(pwd)
+SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+
+check_status() {
+    echo "🔍 Checking system status..."
     
-    read -p "Bot Token: " BOT_TOKEN
-    read -p "FTP Host (e.g., ftp.example.com): " FTP_HOST
-    read -p "FTP Port (default 21): " FTP_PORT
-    FTP_PORT=${FTP_PORT:-21}
-    read -p "FTP Username: " FTP_USER
-    read -p "FTP Password: " FTP_PASS
-    read -p "FTP Upload Directory (e.g., /public_html): " FTP_DIR
-    FTP_DIR=${FTP_DIR%/}
-    if test_ftp_connection "$FTP_HOST" "$FTP_PORT" "$FTP_USER" "$FTP_PASS" "$FTP_DIR"; then
-        echo "Creating .env file..."
-        cat > .env <<EOL
+    # Check service status
+    if systemctl is-active --quiet $SERVICE_NAME; then
+        echo "✅ Service Status: Running"
+    else
+        echo "❌ Service Status: Not running"
+    fi
+    
+    # Check service enabled
+    if systemctl is-enabled --quiet $SERVICE_NAME; then
+        echo "✅ Service Auto-start: Enabled"
+    else
+        echo "❌ Service Auto-start: Disabled"
+    fi
+    
+    # Check files existence
+    echo -e "\n📂 Files Status:"
+    [ -f ".env" ] && echo "✅ .env file exists" || echo "❌ .env file missing"
+    [ -f "ftpv2ray.py" ] && echo "✅ ftpv2ray.py exists" || echo "❌ ftpv2ray.py missing"
+    [ -f "$SERVICE_FILE" ] && echo "✅ Service file exists" || echo "❌ Service file missing"
+}
+
+show_menu() {
+    echo -e "\n📋 Main Menu:"
+    echo "1) Install/Reinstall Bot"
+    echo "2) Remove Bot Completely"
+    echo "3) Exit"
+    read -p "Select option [1-3]: " menu_choice
+}
+
+install_bot() {
+    echo "🚀 Starting installation process..."
+    
+    # Remove existing files
+    [ -f ".env" ] && rm -f .env
+    [ -f "ftpv2ray.py" ] && rm -f ftpv2ray.py
+    
+    # Setup process
+    while true; do
+        clear
+        echo "📲 Telegram Bot Setup"
+        
+        read -p "Bot Token: " BOT_TOKEN
+        read -p "FTP Host (e.g., ftp.example.com): " FTP_HOST
+        read -p "FTP Port (default 21): " FTP_PORT
+        FTP_PORT=${FTP_PORT:-21}
+        read -p "FTP Username: " FTP_USER
+        read -p "FTP Password: " FTP_PASS
+        read -p "FTP Upload Directory (e.g., /public_html): " FTP_DIR
+        FTP_DIR=${FTP_DIR%/}
+        
+        if test_ftp_connection "$FTP_HOST" "$FTP_PORT" "$FTP_USER" "$FTP_PASS" "$FTP_DIR"; then
+            echo "Creating .env file..."
+            cat > .env <<EOL
 BOT_TOKEN=$BOT_TOKEN
 FTP_HOST=$FTP_HOST
 FTP_PORT=$FTP_PORT
@@ -39,12 +68,13 @@ FTP_USER=$FTP_USER
 FTP_PASS=$FTP_PASS
 FTP_DIR=$FTP_DIR
 EOL
-        break
-    else
-        echo
-        read -p "Invalid credentials! Press Enter to retry..."
-    fi
-done
+            break
+        else
+            echo
+            read -p "Invalid credentials! Press Enter to retry..."
+        fi
+    done
+    # Create bot file
 cat > ftpv2ray.py <<EOF
 #bot file code
 # -*- coding: utf-8 -*-
@@ -263,29 +293,99 @@ if __name__ == '__main__':
 
 #end of bot file   
 EOF
-echo "📦 Installing dependencies..."
-pip3 install python-telegram-bot python-dotenv
-echo "🔒 Setting permissions..."
-chmod 600 .env
-chmod +x ftpv2ray.py
-echo -e "\n🎉 Setup complete! Start the bot:"
-echo "python3 ftpv2ray.py"
-# Create systemd Service
-echo "🛠 Creating systemd service..."
-cat > /etc/systemd/system/v2ray-bot.service <<EOL
+
+    echo "📦 Installing dependencies..."
+    pip3 install python-telegram-bot python-dotenv
+    
+    echo "🔒 Setting permissions..."
+    chmod 600 .env
+    chmod +x ftpv2ray.py
+    
+    echo "🛠 Creating systemd service..."
+    cat > $SERVICE_FILE <<EOL
 [Unit]
 Description=V2ray Telegram Bot
 After=network.target
 [Service]
 User=root
-WorkingDirectory=$(pwd)
-ExecStart=/usr/bin/python3 $(pwd)/ftpv2ray.py
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/usr/bin/python3 $PROJECT_DIR/ftpv2ray.py
 Restart=always
 [Install]
 WantedBy=multi-user.target
 EOL
-# Running Service
-systemctl daemon-reload
-systemctl enable v2ray-bot
-systemctl start v2ray-bot
-echo -e "\n🎉 Setup complete! Bot is running automatically."
+
+    systemctl daemon-reload
+    systemctl enable $SERVICE_NAME
+    systemctl start $SERVICE_NAME
+    
+    echo -e "\n🎉 Installation complete! Bot is running automatically."
+}
+
+remove_bot() {
+    echo "⚠️ WARNING: This will completely remove the bot!"
+    read -p "Are you sure? [y/N] " confirm
+    if [[ $confirm =~ [yY] ]]; then
+        echo "🗑 Starting removal process..."
+        
+        # Stop and disable service
+        systemctl stop $SERVICE_NAME 2>/dev/null
+        systemctl disable $SERVICE_NAME 2>/dev/null
+        rm -f $SERVICE_FILE
+        
+        # Remove project files
+        rm -f .env ftpv2ray.py
+        
+        # Reload systemd
+        systemctl daemon-reload
+        systemctl reset-failed
+        
+        echo "✅ All bot components removed successfully!"
+    else
+        echo "❌ Removal canceled."
+    fi
+}
+
+test_ftp_connection() {
+    echo "🔌 Testing FTP connection to $1:$2..."
+    python3 - <<EOF
+import sys
+from ftplib import FTP
+try:
+    ftp = FTP()
+    ftp.connect("$1", $2)
+    ftp.login("$3", "$4")
+    ftp.cwd("$5")
+    print("✅ FTP connection successful!")
+    ftp.quit()
+    sys.exit(0)
+except Exception as e:
+    print(f"❌ FTP Error: {str(e)}")
+    sys.exit(1)
+EOF
+}
+
+# Main loop
+while true; do
+    clear
+    check_status
+    show_menu
+    
+    case $menu_choice in
+        1)
+            install_bot
+            ;;
+        2)
+            remove_bot
+            ;;
+        3)
+            echo "👋 Exiting..."
+            exit 0
+            ;;
+        *)
+            echo "❌ Invalid option!"
+            ;;
+    esac
+    
+    read -p "Press Enter to continue..."
+done
