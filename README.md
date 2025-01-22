@@ -1,4 +1,4 @@
-# 🤖 ربات مدیریت V2Ray با قابلیت FTP
+# 🤖 ربات مدیریت سابسکریپشن انواع کانفیگ V2Ray با قابلیت FTP
 
 ![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Telegram API](https://img.shields.io/badge/Telegram%20Bot%20API-20%2B-brightgreen)
