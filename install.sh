@@ -202,7 +202,7 @@ async def process_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return FILENAME
 
 def generate_php(filename, links):
-    """تولید محتوای PHP"""
+    """تولید محتوای PHP با سینتکس صحیح"""
     php_code = ""
     for link in links:
         php_code += f'''<div style="user-select: none; color: transparent;">
@@ -212,7 +212,7 @@ $content = file_get_contents($url);
 echo $content;
 ?>
 </div>\n\n'''
-    php_code = php_code.rsplit('\n\n', 1)[0]
+    php_code = php_code.rstrip('\n\n')  # حذف خطوط خالی اضافی در انتها
     with open(f'{filename}.php', 'w', encoding='utf-8') as f:
         f.write(php_code)
 
