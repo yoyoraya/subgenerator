@@ -219,11 +219,11 @@ def generate_php(filename, links):
     """تولید محتوای PHP با سینتکس صحیح"""
     php_code = ""
     for link in links:
-        php_code += f'''<div style="user-select: none; color: transparent;">
+        php_code += r'''<div style="user-select: none; color: transparent;">
 <?php
-$$url = "{link}";
-$$content = file_get_contents($$url);
-echo $$content;
+$url = "''' + link + r'''";
+$content = file_get_contents($url);
+echo $content;
 ?>
 </div>\n\n'''
     php_code = php_code.rstrip('\n\n')  # حذف خطوط خالی اضافی در انتها
