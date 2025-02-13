@@ -5,6 +5,20 @@ SERVICE_NAME="v2ray-bot"
 PROJECT_DIR=$(pwd)
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 
+# Function to install prerequisites
+install_prerequisites() {
+    echo "🔧 Installing prerequisites..."
+    
+    # Check if pip3 is installed
+    if ! command -v pip3 &> /dev/null; then
+        echo "🛠 Installing python3-pip..."
+        apt update && apt install -y python3-pip
+    fi
+    
+    # Install required Python packages
+    echo "📦 Installing Python dependencies..."
+    pip3 install python-dotenv python-telegram-bot
+}
 check_status() {
     echo "🔍 Checking system status..."
     
